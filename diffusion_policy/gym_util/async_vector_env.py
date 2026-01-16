@@ -230,8 +230,9 @@ class AsyncVectorEnv(VectorEnv):
         self._state = AsyncState.DEFAULT
 
         if not self.shared_memory:
+            # gym 0.26+ changed concatenate signature from (items, out, space) to (space, items, out)
             self.observations = concatenate(
-                results, self.observations, self.single_observation_space
+                self.single_observation_space, results, self.observations
             )
 
         return deepcopy(self.observations) if self.copy else self.observations
@@ -293,8 +294,9 @@ class AsyncVectorEnv(VectorEnv):
         observations_list, rewards, dones, infos = zip(*results)
 
         if not self.shared_memory:
+            # gym 0.26+ changed concatenate signature from (items, out, space) to (space, items, out)
             self.observations = concatenate(
-                observations_list, self.observations, self.single_observation_space
+                self.single_observation_space, observations_list, self.observations
             )
 
         return (
@@ -567,10 +569,19 @@ def _worker(index, env_fn, pipe, parent_pipe, shared_memory, error_queue):
         while True:
             command, data = pipe.recv()
             if command == "reset":
-                observation = env.reset()
+                result = env.reset()
+                # gym 0.26+ returns (obs, info), older versions return just obs
+                observation = result[0] if isinstance(result, tuple) else result
                 pipe.send((observation, True))
             elif command == "step":
-                observation, reward, done, info = env.step(data)
+                step_result = env.step(data)
+                # gym 0.26+ returns (obs, reward, terminated, truncated, info)
+                # older versions return (obs, reward, done, info)
+                if len(step_result) == 5:
+                    observation, reward, terminated, truncated, info = step_result
+                    done = terminated or truncated
+                else:
+                    observation, reward, done, info = step_result
                 # if done:
                 #     observation = env.reset()
                 pipe.send(((observation, reward, done, info), True))
@@ -621,13 +632,22 @@ def _worker_shared_memory(index, env_fn, pipe, parent_pipe, shared_memory, error
         while True:
             command, data = pipe.recv()
             if command == "reset":
-                observation = env.reset()
+                result = env.reset()
+                # gym 0.26+ returns (obs, info), older versions return just obs
+                observation = result[0] if isinstance(result, tuple) else result
                 write_to_shared_memory(
                     index, observation, shared_memory, observation_space
                 )
                 pipe.send((None, True))
             elif command == "step":
-                observation, reward, done, info = env.step(data)
+                step_result = env.step(data)
+                # gym 0.26+ returns (obs, reward, terminated, truncated, info)
+                # older versions return (obs, reward, done, info)
+                if len(step_result) == 5:
+                    observation, reward, terminated, truncated, info = step_result
+                    done = terminated or truncated
+                else:
+                    observation, reward, done, info = step_result
                 # if done:
                 #     observation = env.reset()
                 write_to_shared_memory(
